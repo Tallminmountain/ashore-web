@@ -1,7 +1,7 @@
 import { ref } from 'vue'
 import { useAuth } from './useAuth.js'
 
-const API = 'http://localhost:3000/api'
+const API = import.meta.env.PROD ? '/api' : 'http://localhost:3000/api'
 
 function authHeaders() {
   const { getToken } = useAuth()

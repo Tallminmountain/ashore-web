@@ -2,254 +2,305 @@ const express = require('express')
 const cors = require('cors')
 const jwt = require('jsonwebtoken')
 const bcrypt = require('bcryptjs')
-const db = require('./db.cjs')
+const { db, initDB } = require('./db.cjs')
 
 const app = express()
-const PORT = 3000
-const JWT_SECRET = 'ashore_secret_key_2026'
+const JWT_SECRET = process.env.JWT_SECRET || 'ashore_secret_key_2026'
 
 app.use(cors())
 app.use(express.json())
 
-// ===================== Auth 中间件 =====================
+// 初始化数据库表
+let dbReady = initDB().catch(err => { console.error('DB init error:', err); throw err })
+
+// 等待 DB 就绪中间件
+async function ensureDB(req, res, next) {
+  await dbReady
+  next()
+}
+
+// Auth 中间件
 function auth(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '')
   if (!token) return res.status(401).json({ error: '未登录' })
   try {
-    const decoded = jwt.verify(token, JWT_SECRET)
-    req.userId = decoded.id
+    req.userId = jwt.verify(token, JWT_SECRET).id
     next()
-  } catch {
-    res.status(401).json({ error: '登录已过期' })
-  }
+  } catch { res.status(401).json({ error: '登录已过期' }) }
 }
 
 // ===================== 注册 =====================
-app.post('/api/auth/register', (req, res) => {
-  const { email, password, username, nickname } = req.body
-  if (!email || !password || !username) {
-    return res.status(400).json({ error: '请填写完整信息' })
-  }
-  if (password.length < 4) {
-    return res.status(400).json({ error: '密码至少4个字符' })
-  }
+app.post('/api/auth/register', ensureDB, async (req, res) => {
+  try {
+    const { email, password, username, nickname } = req.body
+    if (!email || !password || !username) return res.status(400).json({ error: '请填写完整信息' })
+    if (password.length < 4) return res.status(400).json({ error: '密码至少4个字符' })
 
-  const exists = db.prepare('SELECT id FROM users WHERE email = ?').get(email)
-  if (exists) return res.status(400).json({ error: '该邮箱已注册' })
+    const { rows } = await db.execute('SELECT id FROM users WHERE email = ?', [email])
+    if (rows.length > 0) return res.status(400).json({ error: '该邮箱已注册' })
 
-  const hash = bcrypt.hashSync(password, 10)
-  const result = db.prepare(
-    'INSERT INTO users (email, password, username, nickname) VALUES (?, ?, ?, ?)'
-  ).run(email, hash, username.toLowerCase(), nickname || username)
+    const hash = bcrypt.hashSync(password, 10)
+    const result = await db.execute(
+      'INSERT INTO users (email, password, username, nickname) VALUES (?, ?, ?, ?)',
+      [email, hash, username.toLowerCase(), nickname || username]
+    )
+    const userId = Number(result.lastInsertRowid)
+    await db.execute('INSERT INTO user_settings (user_id) VALUES (?)', [userId])
 
-  // 自动创建默认设置
-  db.prepare('INSERT INTO user_settings (user_id) VALUES (?)').run(result.lastInsertRowid)
-
-  const token = jwt.sign({ id: result.lastInsertRowid }, JWT_SECRET, { expiresIn: '30d' })
-  res.json({
-    token,
-    user: { id: result.lastInsertRowid, email, username: username.toLowerCase(), nickname: nickname || username }
-  })
+    const token = jwt.sign({ id: userId }, JWT_SECRET, { expiresIn: '30d' })
+    res.json({ token, user: { id: userId, email, username: username.toLowerCase(), nickname: nickname || username } })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
 // ===================== 登录 =====================
-app.post('/api/auth/login', (req, res) => {
-  const { email, password } = req.body
-  if (!email || !password) return res.status(400).json({ error: '请填写邮箱和密码' })
+app.post('/api/auth/login', ensureDB, async (req, res) => {
+  try {
+    const { email, password } = req.body
+    if (!email || !password) return res.status(400).json({ error: '请填写邮箱和密码' })
 
-  const user = db.prepare('SELECT * FROM users WHERE email = ?').get(email)
-  if (!user) return res.status(400).json({ error: '邮箱或密码错误' })
+    const { rows } = await db.execute('SELECT * FROM users WHERE email = ?', [email])
+    if (rows.length === 0) return res.status(400).json({ error: '邮箱或密码错误' })
 
-  if (!bcrypt.compareSync(password, user.password)) {
-    return res.status(400).json({ error: '邮箱或密码错误' })
-  }
+    const user = rows[0]
+    if (!bcrypt.compareSync(password, user.password))
+      return res.status(400).json({ error: '邮箱或密码错误' })
 
-  const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: '30d' })
-  res.json({
-    token,
-    user: { id: user.id, email: user.email, username: user.username, nickname: user.nickname }
-  })
+    const token = jwt.sign({ id: user.id }, JWT_SECRET, { expiresIn: '30d' })
+    res.json({ token, user: { id: user.id, email: user.email, username: user.username, nickname: user.nickname } })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-// ===================== 获取当前用户 =====================
-app.get('/api/auth/me', auth, (req, res) => {
-  const user = db.prepare('SELECT id, email, username, nickname FROM users WHERE id = ?').get(req.userId)
-  if (!user) return res.status(404).json({ error: '用户不存在' })
-  res.json(user)
+// ===================== 当前用户 =====================
+app.get('/api/auth/me', ensureDB, auth, async (req, res) => {
+  try {
+    const { rows } = await db.execute('SELECT id, email, username, nickname FROM users WHERE id = ?', [req.userId])
+    if (rows.length === 0) return res.status(404).json({ error: '用户不存在' })
+    res.json(rows[0])
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-// ===================== 任务 CRUD =====================
-app.get('/api/tasks', auth, (req, res) => {
-  const rows = db.prepare('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at').all(req.userId)
-  res.json(rows.map(r => ({
-    ...r, completed: !!r.completed, date: r.task_date, estimatedMinutes: r.estimated_minutes, actualSeconds: r.actual_seconds
-  })))
+// ===================== 任务 =====================
+app.get('/api/tasks', ensureDB, auth, async (req, res) => {
+  try {
+    const { rows } = await db.execute('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at', [req.userId])
+    res.json(rows.map(r => ({ ...r, completed: !!r.completed, date: r.task_date, estimatedMinutes: r.estimated_minutes, actualSeconds: r.actual_seconds })))
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-app.post('/api/tasks', auth, (req, res) => {
-  const { title, category, subject, estimatedMinutes, date } = req.body
-  const result = db.prepare(
-    'INSERT INTO tasks (user_id, title, category, subject, estimated_minutes, task_date) VALUES (?,?,?,?,?,?)'
-  ).run(req.userId, title, category || 'general', subject || '', estimatedMinutes || 30, date || new Date().toISOString().slice(0, 10))
-  const row = db.prepare('SELECT * FROM tasks WHERE id = ?').get(result.lastInsertRowid)
-  res.json({ ...row, completed: !!row.completed, date: row.task_date, estimatedMinutes: row.estimated_minutes, actualSeconds: row.actual_seconds })
+app.post('/api/tasks', ensureDB, auth, async (req, res) => {
+  try {
+    const { title, category, subject, estimatedMinutes, date } = req.body
+    if (!title?.trim()) return res.status(400).json({ error: '任务名称不能为空' })
+    const result = await db.execute(
+      'INSERT INTO tasks (user_id, title, category, subject, estimated_minutes, task_date) VALUES (?,?,?,?,?,?)',
+      [req.userId, title, category || 'general', subject || '', estimatedMinutes || 30, date || new Date().toISOString().slice(0, 10)]
+    )
+    const { rows } = await db.execute('SELECT * FROM tasks WHERE id = ?', [Number(result.lastInsertRowid)])
+    const r = rows[0]
+    res.json({ ...r, completed: !!r.completed, date: r.task_date, estimatedMinutes: r.estimated_minutes, actualSeconds: r.actual_seconds })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-app.patch('/api/tasks/:id', auth, (req, res) => {
-  const { completed, actual_seconds } = req.body
-  const updates = []
-  const values = []
-  if (completed !== undefined) { updates.push('completed = ?'); values.push(completed ? 1 : 0) }
-  if (actual_seconds !== undefined) { updates.push('actual_seconds = ?'); values.push(actual_seconds) }
-  if (updates.length === 0) return res.json({ ok: true })
-  values.push(req.params.id, req.userId)
-  db.prepare(`UPDATE tasks SET ${updates.join(',')} WHERE id = ? AND user_id = ?`).run(...values)
-  res.json({ ok: true })
+app.patch('/api/tasks/:id', ensureDB, auth, async (req, res) => {
+  try {
+    const { completed, actual_seconds } = req.body
+    const updates = [], values = []
+    if (completed !== undefined) { updates.push('completed = ?'); values.push(completed ? 1 : 0) }
+    if (actual_seconds !== undefined) { updates.push('actual_seconds = ?'); values.push(actual_seconds) }
+    if (updates.length === 0) return res.json({ ok: true })
+    values.push(req.params.id, req.userId)
+    await db.execute(`UPDATE tasks SET ${updates.join(',')} WHERE id = ? AND user_id = ?`, values)
+    res.json({ ok: true })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-app.delete('/api/tasks/:id', auth, (req, res) => {
-  db.prepare('DELETE FROM tasks WHERE id = ? AND user_id = ?').run(req.params.id, req.userId)
-  res.json({ ok: true })
+app.delete('/api/tasks/:id', ensureDB, auth, async (req, res) => {
+  try {
+    await db.execute('DELETE FROM tasks WHERE id = ? AND user_id = ?', [req.params.id, req.userId])
+    res.json({ ok: true })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
 // ===================== 学习日志 =====================
-app.get('/api/study-logs', auth, (req, res) => {
-  const rows = db.prepare('SELECT * FROM study_logs WHERE user_id = ? ORDER BY created_at').all(req.userId)
-  res.json(rows.map(r => ({ ...r, date: r.log_date, timestamp: new Date(r.created_at).getTime() })))
+app.get('/api/study-logs', ensureDB, auth, async (req, res) => {
+  try {
+    const { rows } = await db.execute('SELECT * FROM study_logs WHERE user_id = ? ORDER BY created_at', [req.userId])
+    res.json(rows.map(r => ({ ...r, date: r.log_date, timestamp: new Date(r.created_at).getTime() })))
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-app.post('/api/study-logs', auth, (req, res) => {
-  const { category, subject, seconds } = req.body
-  const result = db.prepare(
-    'INSERT INTO study_logs (user_id, category, subject, seconds) VALUES (?,?,?,?)'
-  ).run(req.userId, category || 'general', subject || '', seconds)
-  const row = db.prepare('SELECT * FROM study_logs WHERE id = ?').get(result.lastInsertRowid)
-  res.json({ ...row, date: row.log_date, timestamp: new Date(row.created_at).getTime() })
+app.post('/api/study-logs', ensureDB, auth, async (req, res) => {
+  try {
+    const { category, subject, seconds } = req.body
+    const result = await db.execute(
+      'INSERT INTO study_logs (user_id, category, subject, seconds) VALUES (?,?,?,?)',
+      [req.userId, category || 'general', subject || '', seconds]
+    )
+    const { rows } = await db.execute('SELECT * FROM study_logs WHERE id = ?', [Number(result.lastInsertRowid)])
+    const r = rows[0]
+    res.json({ ...r, date: r.log_date, timestamp: new Date(r.created_at).getTime() })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
 // ===================== 番茄钟 =====================
-app.get('/api/pomodoro-logs', auth, (req, res) => {
-  const rows = db.prepare('SELECT * FROM pomodoro_logs WHERE user_id = ? ORDER BY created_at').all(req.userId)
-  res.json(rows.map(r => ({ ...r, completed: !!r.completed, date: r.log_date, timestamp: new Date(r.created_at).getTime() })))
+app.get('/api/pomodoro-logs', ensureDB, auth, async (req, res) => {
+  try {
+    const { rows } = await db.execute('SELECT * FROM pomodoro_logs WHERE user_id = ? ORDER BY created_at', [req.userId])
+    res.json(rows.map(r => ({ ...r, completed: !!r.completed, date: r.log_date, timestamp: new Date(r.created_at).getTime() })))
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-app.post('/api/pomodoro-logs', auth, (req, res) => {
-  const { type, duration, completed } = req.body
-  const result = db.prepare(
-    'INSERT INTO pomodoro_logs (user_id, type, duration, completed) VALUES (?,?,?,?)'
-  ).run(req.userId, type, duration, completed ? 1 : 0)
-  const row = db.prepare('SELECT * FROM pomodoro_logs WHERE id = ?').get(result.lastInsertRowid)
-  res.json({ ...row, completed: !!row.completed, date: row.log_date, timestamp: new Date(row.created_at).getTime() })
+app.post('/api/pomodoro-logs', ensureDB, auth, async (req, res) => {
+  try {
+    const { type, duration, completed } = req.body
+    const result = await db.execute(
+      'INSERT INTO pomodoro_logs (user_id, type, duration, completed) VALUES (?,?,?,?)',
+      [req.userId, type, duration, completed ? 1 : 0]
+    )
+    const { rows } = await db.execute('SELECT * FROM pomodoro_logs WHERE id = ?', [Number(result.lastInsertRowid)])
+    const r = rows[0]
+    res.json({ ...r, completed: !!r.completed, date: r.log_date, timestamp: new Date(r.created_at).getTime() })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
 // ===================== 用户设置 =====================
-app.get('/api/settings', auth, (req, res) => {
-  let settings = db.prepare('SELECT * FROM user_settings WHERE user_id = ?').get(req.userId)
-  if (!settings) {
-    db.prepare('INSERT INTO user_settings (user_id) VALUES (?)').run(req.userId)
-    settings = db.prepare('SELECT * FROM user_settings WHERE user_id = ?').get(req.userId)
-  }
-  res.json(settings)
+app.get('/api/settings', ensureDB, auth, async (req, res) => {
+  try {
+    let { rows } = await db.execute('SELECT * FROM user_settings WHERE user_id = ?', [req.userId])
+    if (rows.length === 0) {
+      await db.execute('INSERT INTO user_settings (user_id) VALUES (?)', [req.userId])
+      const r2 = await db.execute('SELECT * FROM user_settings WHERE user_id = ?', [req.userId])
+      rows = r2.rows
+    }
+    res.json(rows[0])
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-app.patch('/api/settings', auth, (req, res) => {
-  const fields = ['exam_date', 'ielts_exam_date', 'ielts_target', 'pomodoro_focus', 'pomodoro_break', 'pomodoro_long_break', 'pomodoro_long_break_interval']
-  const updates = []
-  const values = []
-  for (const f of fields) {
-    if (req.body[f] !== undefined) {
-      updates.push(`${f} = ?`)
-      values.push(req.body[f])
+app.patch('/api/settings', ensureDB, auth, async (req, res) => {
+  try {
+    const fields = ['exam_date', 'ielts_exam_date', 'ielts_target', 'pomodoro_focus', 'pomodoro_break', 'pomodoro_long_break', 'pomodoro_long_break_interval']
+    const updates = [], values = []
+    for (const f of fields) {
+      if (req.body[f] !== undefined) { updates.push(`${f} = ?`); values.push(req.body[f]) }
     }
-  }
-  if (updates.length > 0) {
-    values.push(req.userId)
-    db.prepare(`UPDATE user_settings SET ${updates.join(',')} WHERE user_id = ?`).run(...values)
-  }
-  res.json({ ok: true })
+    if (updates.length > 0) {
+      values.push(req.userId)
+      await db.execute(`UPDATE user_settings SET ${updates.join(',')} WHERE user_id = ?`, values)
+    }
+    res.json({ ok: true })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
 // ===================== 考研计划 =====================
-app.get('/api/exam-tasks', auth, (req, res) => {
-  const rows = db.prepare('SELECT * FROM exam_tasks WHERE user_id = ? ORDER BY created_at').all(req.userId)
-  res.json(rows.map(r => ({ ...r, completed: !!r.completed, date: r.task_date })))
+app.get('/api/exam-tasks', ensureDB, auth, async (req, res) => {
+  try {
+    const { rows } = await db.execute('SELECT * FROM exam_tasks WHERE user_id = ? ORDER BY created_at', [req.userId])
+    res.json(rows.map(r => ({ ...r, completed: !!r.completed, date: r.task_date })))
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-app.post('/api/exam-tasks', auth, (req, res) => {
-  const { subject_id, title, date } = req.body
-  const result = db.prepare(
-    'INSERT INTO exam_tasks (user_id, subject_id, title, task_date) VALUES (?,?,?,?)'
-  ).run(req.userId, subject_id, title, date || new Date().toISOString().slice(0, 10))
-  const row = db.prepare('SELECT * FROM exam_tasks WHERE id = ?').get(result.lastInsertRowid)
-  res.json({ ...row, completed: !!row.completed, date: row.task_date })
+app.post('/api/exam-tasks', ensureDB, auth, async (req, res) => {
+  try {
+    const { subject_id, title, date } = req.body
+    const result = await db.execute(
+      'INSERT INTO exam_tasks (user_id, subject_id, title, task_date) VALUES (?,?,?,?)',
+      [req.userId, subject_id, title, date || new Date().toISOString().slice(0, 10)]
+    )
+    const { rows } = await db.execute('SELECT * FROM exam_tasks WHERE id = ?', [Number(result.lastInsertRowid)])
+    const r = rows[0]
+    res.json({ ...r, completed: !!r.completed, date: r.task_date })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-app.patch('/api/exam-tasks/:id', auth, (req, res) => {
-  if (req.body.completed !== undefined) {
-    db.prepare('UPDATE exam_tasks SET completed = ? WHERE id = ? AND user_id = ?')
-      .run(req.body.completed ? 1 : 0, req.params.id, req.userId)
-  }
-  res.json({ ok: true })
+app.patch('/api/exam-tasks/:id', ensureDB, auth, async (req, res) => {
+  try {
+    if (req.body.completed !== undefined) {
+      await db.execute('UPDATE exam_tasks SET completed = ? WHERE id = ? AND user_id = ?',
+        [req.body.completed ? 1 : 0, req.params.id, req.userId])
+    }
+    res.json({ ok: true })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-app.delete('/api/exam-tasks/:id', auth, (req, res) => {
-  db.prepare('DELETE FROM exam_tasks WHERE id = ? AND user_id = ?').run(req.params.id, req.userId)
-  res.json({ ok: true })
+app.delete('/api/exam-tasks/:id', ensureDB, auth, async (req, res) => {
+  try {
+    await db.execute('DELETE FROM exam_tasks WHERE id = ? AND user_id = ?', [req.params.id, req.userId])
+    res.json({ ok: true })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
 // ===================== 雅思计划 =====================
-app.get('/api/ielts-tasks', auth, (req, res) => {
-  const rows = db.prepare('SELECT * FROM ielts_tasks WHERE user_id = ? ORDER BY created_at').all(req.userId)
-  res.json(rows.map(r => ({ ...r, completed: !!r.completed, date: r.task_date })))
+app.get('/api/ielts-tasks', ensureDB, auth, async (req, res) => {
+  try {
+    const { rows } = await db.execute('SELECT * FROM ielts_tasks WHERE user_id = ? ORDER BY created_at', [req.userId])
+    res.json(rows.map(r => ({ ...r, completed: !!r.completed, date: r.task_date })))
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-app.post('/api/ielts-tasks', auth, (req, res) => {
-  const { skill_id, title, date } = req.body
-  const result = db.prepare(
-    'INSERT INTO ielts_tasks (user_id, skill_id, title, task_date) VALUES (?,?,?,?)'
-  ).run(req.userId, skill_id, title, date || new Date().toISOString().slice(0, 10))
-  const row = db.prepare('SELECT * FROM ielts_tasks WHERE id = ?').get(result.lastInsertRowid)
-  res.json({ ...row, completed: !!row.completed, date: row.task_date })
+app.post('/api/ielts-tasks', ensureDB, auth, async (req, res) => {
+  try {
+    const { skill_id, title, date } = req.body
+    const result = await db.execute(
+      'INSERT INTO ielts_tasks (user_id, skill_id, title, task_date) VALUES (?,?,?,?)',
+      [req.userId, skill_id, title, date || new Date().toISOString().slice(0, 10)]
+    )
+    const { rows } = await db.execute('SELECT * FROM ielts_tasks WHERE id = ?', [Number(result.lastInsertRowid)])
+    const r = rows[0]
+    res.json({ ...r, completed: !!r.completed, date: r.task_date })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-app.patch('/api/ielts-tasks/:id', auth, (req, res) => {
-  if (req.body.completed !== undefined) {
-    db.prepare('UPDATE ielts_tasks SET completed = ? WHERE id = ? AND user_id = ?')
-      .run(req.body.completed ? 1 : 0, req.params.id, req.userId)
-  }
-  res.json({ ok: true })
+app.patch('/api/ielts-tasks/:id', ensureDB, auth, async (req, res) => {
+  try {
+    if (req.body.completed !== undefined) {
+      await db.execute('UPDATE ielts_tasks SET completed = ? WHERE id = ? AND user_id = ?',
+        [req.body.completed ? 1 : 0, req.params.id, req.userId])
+    }
+    res.json({ ok: true })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-app.delete('/api/ielts-tasks/:id', auth, (req, res) => {
-  db.prepare('DELETE FROM ielts_tasks WHERE id = ? AND user_id = ?').run(req.params.id, req.userId)
-  res.json({ ok: true })
+app.delete('/api/ielts-tasks/:id', ensureDB, auth, async (req, res) => {
+  try {
+    await db.execute('DELETE FROM ielts_tasks WHERE id = ? AND user_id = ?', [req.params.id, req.userId])
+    res.json({ ok: true })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-// ===================== 批量拉取（登录后一次拉所有数据）=====================
-app.get('/api/all', auth, (req, res) => {
-  const uid = req.userId
-  const tasks = db.prepare('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at').all(uid)
-  const studyLogs = db.prepare('SELECT * FROM study_logs WHERE user_id = ? ORDER BY created_at').all(uid)
-  const pomodoroLogs = db.prepare('SELECT * FROM pomodoro_logs WHERE user_id = ? ORDER BY created_at').all(uid)
-  const examTasks = db.prepare('SELECT * FROM exam_tasks WHERE user_id = ? ORDER BY created_at').all(uid)
-  const ieltsTasks = db.prepare('SELECT * FROM ielts_tasks WHERE user_id = ? ORDER BY created_at').all(uid)
-  let settings = db.prepare('SELECT * FROM user_settings WHERE user_id = ?').get(uid)
-  if (!settings) {
-    db.prepare('INSERT INTO user_settings (user_id) VALUES (?)').run(uid)
-    settings = db.prepare('SELECT * FROM user_settings WHERE user_id = ?').get(uid)
-  }
+// ===================== 批量拉取 =====================
+app.get('/api/all', ensureDB, auth, async (req, res) => {
+  try {
+    const uid = req.userId
+    const [tasksR, logsR, pomR, examR, ieltsR, settingsR] = await Promise.all([
+      db.execute('SELECT * FROM tasks WHERE user_id = ? ORDER BY created_at', [uid]),
+      db.execute('SELECT * FROM study_logs WHERE user_id = ? ORDER BY created_at', [uid]),
+      db.execute('SELECT * FROM pomodoro_logs WHERE user_id = ? ORDER BY created_at', [uid]),
+      db.execute('SELECT * FROM exam_tasks WHERE user_id = ? ORDER BY created_at', [uid]),
+      db.execute('SELECT * FROM ielts_tasks WHERE user_id = ? ORDER BY created_at', [uid]),
+      db.execute('SELECT * FROM user_settings WHERE user_id = ?', [uid]),
+    ])
 
-  res.json({
-    tasks: tasks.map(r => ({ ...r, completed: !!r.completed, date: r.task_date, estimatedMinutes: r.estimated_minutes, actualSeconds: r.actual_seconds })),
-    studyLogs: studyLogs.map(r => ({ ...r, date: r.log_date, timestamp: new Date(r.created_at).getTime() })),
-    pomodoroLogs: pomodoroLogs.map(r => ({ ...r, completed: !!r.completed, date: r.log_date, timestamp: new Date(r.created_at).getTime() })),
-    examTasks: examTasks.map(r => ({ ...r, completed: !!r.completed, date: r.task_date })),
-    ieltsTasks: ieltsTasks.map(r => ({ ...r, completed: !!r.completed, date: r.task_date })),
-    settings,
-  })
+    let settings = settingsR.rows[0]
+    if (!settings) {
+      await db.execute('INSERT INTO user_settings (user_id) VALUES (?)', [uid])
+      settings = (await db.execute('SELECT * FROM user_settings WHERE user_id = ?', [uid])).rows[0]
+    }
+
+    res.json({
+      tasks: tasksR.rows.map(r => ({ ...r, completed: !!r.completed, date: r.task_date, estimatedMinutes: r.estimated_minutes, actualSeconds: r.actual_seconds })),
+      studyLogs: logsR.rows.map(r => ({ ...r, date: r.log_date, timestamp: new Date(r.created_at).getTime() })),
+      pomodoroLogs: pomR.rows.map(r => ({ ...r, completed: !!r.completed, date: r.log_date, timestamp: new Date(r.created_at).getTime() })),
+      examTasks: examR.rows.map(r => ({ ...r, completed: !!r.completed, date: r.task_date })),
+      ieltsTasks: ieltsR.rows.map(r => ({ ...r, completed: !!r.completed, date: r.task_date })),
+      settings,
+    })
+  } catch (e) { console.error(e); res.status(500).json({ error: '服务器错误' }) }
 })
 
-// ===================== 启动 =====================
-app.listen(PORT, () => {
-  console.log(`🚀 Ashore 后端已启动: http://localhost:${PORT}`)
-})
+// ===================== 本地启动 =====================
+if (require.main === module) {
+  const PORT = process.env.PORT || 3000
+  app.listen(PORT, () => console.log(`🚀 Ashore 后端已启动: http://localhost:${PORT}`))
+}
+
+module.exports = app

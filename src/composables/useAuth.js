@@ -1,6 +1,6 @@
 import { ref, computed } from 'vue'
 
-const API = 'http://localhost:3000/api'
+const API = import.meta.env.PROD ? '/api' : 'http://localhost:3000/api'
 const TOKEN_KEY = 'ashore_token'
 const USER_KEY = 'ashore_user'
 
