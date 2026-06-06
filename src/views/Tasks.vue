@@ -110,7 +110,10 @@ onUnmounted(() => {
 function changeDate(offset) {
   const d = new Date(filterDate.value)
   d.setDate(d.getDate() + offset)
-  filterDate.value = d.toISOString().slice(0, 10)
+  const y = d.getFullYear()
+  const m = String(d.getMonth() + 1).padStart(2, '0')
+  const day = String(d.getDate()).padStart(2, '0')
+  filterDate.value = `${y}-${m}-${day}`
 }
 </script>
 
