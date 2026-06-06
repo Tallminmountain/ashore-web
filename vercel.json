@@ -1,5 +1,5 @@
 {
-  "installCommand": "npm install --production --ignore-scripts",
+  "installCommand": "npm install --production",
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "functions": {
