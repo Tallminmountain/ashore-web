@@ -3,8 +3,8 @@ require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') }
 let db
 
 if (process.env.TURSO_URL) {
-  // Vercel / 生产环境 → Turso
-  const { createClient } = require('@libsql/client')
+  // Vercel / 生产环境 → Turso（用 web 版，无原生依赖）
+  const { createClient } = require('@libsql/client/web')
   db = createClient({
     url: process.env.TURSO_URL,
     authToken: process.env.TURSO_AUTH_TOKEN,
