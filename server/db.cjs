@@ -1,5 +1,11 @@
 // 自动检测环境：本地用 SQLite，Vercel 用 Turso
-require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') })
+if (!process.env.VERCEL) {
+  require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') })
+}
+
+console.log('[DB] TURSO_URL:', process.env.TURSO_URL ? '已设置' : '未设置')
+console.log('[DB] VERCEL:', process.env.VERCEL || '未设置')
+
 let db
 
 if (process.env.TURSO_URL) {
