@@ -303,4 +303,94 @@ if (require.main === module) {
   app.listen(PORT, () => console.log(`🚀 Ashore 后端已启动: http://localhost:${PORT}`))
 }
 
+// ===================== AI 生成今日计划 =====================
+app.post('/api/ai/plan', ensureDB, auth, async (req, res) => {
+  const AI_KEY = process.env.AI_API_KEY || process.env.DEEPSEEK_API_KEY || ''
+  const AI_BASE = process.env.AI_BASE_URL || 'https://api.xiaomimimo.com/v1'
+  const AI_MODEL = process.env.AI_MODEL || 'mimo-v2.5-pro'
+  if (!AI_KEY) return res.status(500).json({ error: '未配置 AI API Key' })
+  try {
+    const uid = req.userId
+    const [settingsR, studyR, tasksR] = await Promise.all([
+      db.execute('SELECT * FROM user_settings WHERE user_id = ?', [uid]),
+      db.execute("SELECT category, subject, seconds, log_date FROM study_logs WHERE user_id = ? AND log_date >= date('now', '-7 days')", [uid]),
+      db.execute("SELECT title, category, completed FROM tasks WHERE user_id = ? AND task_date >= date('now', '-3 days')", [uid]),
+    ])
+
+    const settings = settingsR.rows[0] || {}
+    const examDate = settings.exam_date || '2026-12-20'
+    const ieltsDate = settings.ielts_exam_date || '2026-09-15'
+    const ieltsTarget = settings.ielts_target || 7.0
+    const daysUntilExam = Math.max(0, Math.ceil((new Date(examDate) - new Date()) / 86400000))
+    const daysUntilIelts = Math.max(0, Math.ceil((new Date(ieltsDate) - new Date()) / 86400000))
+
+    const studySummary = {}
+    for (const r of studyR.rows) {
+      const key = r.subject || r.category || '其他'
+      studySummary[key] = (studySummary[key] || 0) + r.seconds
+    }
+    const totalTasks = tasksR.rows.length
+    const completedTasks = tasksR.rows.filter(r => r.completed).length
+
+    const prompt = `你是一个考研/雅思备考学习规划师。请根据以下信息，生成今日学习计划。
+
+【考试信息】
+- 考研(11408)：${daysUntilExam} 天后考试（${examDate}）
+- 雅思：${daysUntilIelts} 天后考试（${ieltsDate}），目标 ${ieltsTarget} 分
+
+【近7天学习情况】
+${Object.entries(studySummary).map(([k, v]) => `- ${k}: ${Math.round(v / 60)} 分钟`).join('\n') || '暂无数据'}
+
+【近3天任务完成率】
+${totalTasks > 0 ? `${completedTasks}/${totalTasks}（${Math.round(completedTasks / totalTasks * 100)}%）` : '暂无数据'}
+
+请生成今日计划，包含：
+1. 考研各科（数学、英语、专业课、政治）的具体任务和建议时长
+2. 雅思各科（听力、阅读、写作、口语）的具体任务和建议时长
+3. 一段简短的鼓励语
+
+要求：
+- 根据剩余天数调整强度（越近越密集）
+- 根据近7天学习情况平衡各科（学得少的科目多安排一些）
+- 任务要具体可执行（如"张宇1000题 第5章"而不是"做数学题"）
+- 总学习时长建议 8-12 小时
+- 用 JSON 格式返回，格式如下：
+{
+  "tasks": [
+    {"title": "具体任务", "category": "math/english/politics/major/listening/reading/writing/speaking", "minutes": 60},
+    ...
+  ],
+  "encouragement": "鼓励语"
+}`
+
+    const response = await fetch(`${AI_BASE}/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${AI_KEY}`,
+      },
+      body: JSON.stringify({
+        model: AI_MODEL,
+        messages: [{ role: 'user', content: prompt }],
+        temperature: 0.7,
+      }),
+    })
+
+    const data = await response.json()
+    const content = data.choices?.[0]?.message?.content || ''
+    const match = content.match(/\{[\s\S]*\}/)
+    if (!match) return res.json({ tasks: [], encouragement: content, raw: content })
+
+    try {
+      const plan = JSON.parse(match[0])
+      res.json(plan)
+    } catch {
+      res.json({ tasks: [], encouragement: content, raw: content })
+    }
+  } catch (e) {
+    console.error('[AI]', e)
+    res.status(500).json({ error: 'AI 生成失败: ' + e.message })
+  }
+})
+
 module.exports = app

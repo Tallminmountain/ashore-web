@@ -11,6 +11,7 @@ import ExamPlan from './views/ExamPlan.vue'
 import IeltsPlan from './views/IeltsPlan.vue'
 import Stats from './views/Stats.vue'
 import Settings from './views/Settings.vue'
+import AiPlan from './views/AiPlan.vue'
 
 import { useAuth } from './composables/useAuth.js'
 
@@ -23,6 +24,7 @@ const routes = [
   { path: '/ielts', name: 'IeltsPlan', component: IeltsPlan, meta: { requiresAuth: true } },
   { path: '/stats', name: 'Stats', component: Stats, meta: { requiresAuth: true } },
   { path: '/settings', name: 'Settings', component: Settings, meta: { requiresAuth: true } },
+  { path: '/ai', name: 'AiPlan', component: AiPlan, meta: { requiresAuth: true } },
   { path: '/:pathMatch(.*)*', redirect: '/' },
 ]
 
