@@ -147,8 +147,10 @@ const greeting = computed(() => {
             <span :style="{ textDecoration: task.completed ? 'line-through' : 'none', flex: 1, fontSize: '13px' }">{{ task.title }}</span>
             <span class="tag" :class="categoryTagClass[task.category] || 'tag-general'">{{ task.category }}</span>
           </div>
-          <div v-if="todayTasks.length > 8" style="text-align: center; padding: 8px; font-size: 12px; color: var(--color-text-secondary);">
-            还有 {{ todayTasks.length - 8 }} 项任务...
+          <div v-if="todayTasks.length > 8" style="text-align: center; padding: 8px;">
+            <button class="btn btn-ghost btn-sm" @click="router.push('/tasks')" style="font-size: 12px; color: var(--color-primary);">
+              还有 {{ todayTasks.length - 8 }} 项任务，查看全部 →
+            </button>
           </div>
         </div>
       </div>

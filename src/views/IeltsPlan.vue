@@ -129,7 +129,7 @@ function getOverallProgress() {
               <svg v-if="task.completed" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="white" stroke-width="3" stroke-linecap="round"><polyline points="20 6 9 17 4 12"/></svg>
             </div>
             <span :style="{ textDecoration: task.completed ? 'line-through' : 'none', flex: 1, fontSize: '13px' }">{{ task.title }}</span>
-            <button class="btn btn-ghost btn-sm" @click="removeDailyTask(skill.id, task.id)" style="padding: 2px 4px;">
+            <button class="btn btn-ghost btn-sm" @click="confirm('确定删除?') && removeDailyTask(skill.id, task.id)" style="padding: 2px 4px;">
               <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>
             </button>
           </div>

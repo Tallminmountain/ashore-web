@@ -195,7 +195,7 @@ function changeDate(offset) {
           >
             {{ isTimerActive(task.id) ? '⏹ 停止' : '▶ 开始' }}
           </button>
-          <button class="btn btn-ghost btn-sm" @click="removeTask(task.id)" style="color: var(--color-text-secondary);">
+          <button class="btn btn-ghost btn-sm" @click="confirm('确定删除?') && removeTask(task.id)" style="color: var(--color-text-secondary);">
             <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
           </button>
         </div>

@@ -8,6 +8,7 @@ const { ieltsPlan } = useIeltsPlan()
 const { currentUser, updateNickname } = useAuth()
 
 const saved = ref(false)
+const isProduction = import.meta.env.PROD
 
 // 表单数据
 const form = ref({
@@ -140,13 +141,13 @@ async function handleSave() {
           💾 数据信息
         </h3>
         <div style="font-size: 13px; color: var(--color-text-secondary); line-height: 2;">
-          <div>存储方式：<strong style="color: var(--color-text);">SQLite 本地数据库</strong></div>
-          <div>数据库位置：<strong style="color: var(--color-text);">ashore.db</strong></div>
-          <div>后端地址：<strong style="color: var(--color-text);">http://localhost:3000</strong></div>
+          <div>存储方式：<strong style="color: var(--color-text);">{{ isProduction ? 'Turso 云端数据库' : 'SQLite 本地数据库' }}</strong></div>
+          <div>后端地址：<strong style="color: var(--color-text);">{{ isProduction ? 'Vercel Serverless' : 'http://localhost:3000' }}</strong></div>
+          <div>AI 模型：<strong style="color: var(--color-text);">小米 MiMo v2.5 Pro</strong></div>
           <div>登录状态：<strong style="color: var(--color-success);">已登录</strong></div>
         </div>
         <div style="margin-top: 12px; padding: 10px; background: #f8fafc; border-radius: 8px; font-size: 11px; color: var(--color-text-secondary);">
-          💡 数据保存在本地 ashore.db 文件中，重装系统前记得备份
+          💡 {{ isProduction ? '数据保存在 Turso 云端，安全可靠' : '数据保存在本地 ashore.db 文件中，重装系统前记得备份' }}
         </div>
       </div>
     </div>

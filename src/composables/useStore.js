@@ -225,6 +225,8 @@ export function useStudyLog() {
   function getStreakDays() {
     let streak = 0
     const d = new Date()
+    // 如果今天还没学习，从昨天开始算
+    if (getTotalSecondsByDate(localDateStr(d)) === 0) d.setDate(d.getDate() - 1)
     for (let i = 0; i < 365; i++) {
       const dateStr = localDateStr(d)
       if (getTotalSecondsByDate(dateStr) > 0) { streak++; d.setDate(d.getDate() - 1) }

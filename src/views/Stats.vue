@@ -1,5 +1,5 @@
 <script setup>
-import { ref, computed, onMounted, onUnmounted } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { Chart, registerables } from 'chart.js'
 import { useStudyLog, useTaskStore, usePomodoro, today } from '../composables/useStore.js'
 
@@ -114,6 +114,11 @@ function initCharts() {
 }
 
 onMounted(() => {
+  setTimeout(initCharts, 100)
+})
+
+// 数据变化后重新渲染图表
+watch(studyLogs, () => {
   setTimeout(initCharts, 100)
 })
 

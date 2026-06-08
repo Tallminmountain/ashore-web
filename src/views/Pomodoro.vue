@@ -21,7 +21,7 @@ watch(totalSeconds, (val) => {
   if (!isRunning.value) remaining.value = val
 })
 
-// Timer
+// Timer — 用 wall clock 时间，防止切标签页漂移
 let interval = null
 
 function start() {
@@ -29,7 +29,8 @@ function start() {
   startedAt.value = Date.now()
   isRunning.value = true
   interval = setInterval(() => {
-    remaining.value--
+    const elapsed = Math.floor((Date.now() - startedAt.value) / 1000)
+    remaining.value = Math.max(0, totalSeconds.value - elapsed)
     if (remaining.value <= 0) {
       complete()
     }
@@ -52,7 +53,7 @@ function complete(forced = false) {
   const elapsed = forced && startedAt.value
     ? Math.round((Date.now() - startedAt.value) / 1000)
     : totalSeconds.value
-  logPomodoro(mode.value, elapsed, !forced || elapsed >= totalSeconds.value * 0.5)
+  logPomodoro(mode.value, elapsed, elapsed >= 60)
 
   if (mode.value === 'focus') {
     sessionCount.value++
